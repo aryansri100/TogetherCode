@@ -1,55 +1,124 @@
-// index.js
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import axios from 'axios';
-import { fileURLToPath } from 'url';
-
-// Fix __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-  },
-});
-
-// Example: keep alive ping to prevent server sleep
 const url = `https://togethercode-f3iy.onrender.com`;
-const interval = 300000; // 5 minutes
+const interval = 30000;
 
-setInterval(async () => {
-  try {
-    await axios.get(url);
-    console.log(`Pinged ${url} at ${new Date().toISOString()}`);
-  } catch (err) {
-    console.error('Ping failed:', err.message);
-  }
-}, interval);
+function reloadWebsite() {
+  axios
+    .get(url)
+    .then((response) => {
+      console.log("website reloded");
+    })
+    .catch((error) => {
+      console.error(`Error : ${error.message}`);
+    });
+}
 
-// Socket.io example
-io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
-
-  socket.on('message', (data) => {
-    console.log('Message from client:', data);
-    io.emit('message', data); // Broadcast to all clients
-  });
-
-  socket.on('disconnect', () => {
-    console.log('A user disconnected:', socket.id);
-  });
+setInterval(reloadWebsite, interval);
+const io = new Server(server, {
+    cors: { origin: '*' },
 });
 
-// Serve static files if needed
-app.use(express.static(path.join(__dirname, 'public')));
+const rooms = new Map();
+const roomLanguages = {}; // store current language per room
 
-// Start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+io.on('connection', (socket) => {
+    console.log('Client connected', socket.id);
+
+    let currentRoom = null;
+    let currentUser = null;
+
+    // Join room
+    socket.on('join', ({ roomId, userName }) => {
+        if (currentRoom) {
+            socket.leave(currentRoom);
+            rooms.get(currentRoom)?.users.delete(currentUser);
+            io.to(currentRoom).emit('userJoined', Array.from(rooms.get(currentRoom)?.users || []));
+        }
+
+        currentRoom = roomId;
+        currentUser = userName;
+        socket.join(roomId);
+
+        if (!rooms.has(roomId)) {
+            rooms.set(roomId, { users: new Set(), code: "// start code here" });
+            roomLanguages[roomId] = "javascript"; // default language for first user
+        }
+
+        rooms.get(roomId).users.add(userName);
+
+        // Send latest code and language to new user
+        socket.emit("codeUpdate", rooms.get(roomId).code);
+        socket.emit("languageUpdate", roomLanguages[roomId]);
+
+        io.to(roomId).emit('userJoined', Array.from(rooms.get(roomId).users));
+    });
+
+    // Code sync
+    socket.on('codeChange', ({ roomId, code }) => {
+        if (rooms.has(roomId)) {
+            rooms.get(roomId).code = code;
+        }
+        socket.to(roomId).emit('codeUpdate', code);
+    });
+
+    // Language sync
+    socket.on("languageChange", ({ roomId, language }) => {
+        roomLanguages[roomId] = language;
+        socket.to(roomId).emit("languageUpdate", language);
+    });
+
+    // Typing indicator
+    socket.on("typing", ({ roomId, userName }) => {
+        socket.to(roomId).emit("userTyping", userName);
+    });
+
+    // Code execution
+    socket.on("compileCode", async ({ code, roomId, language, version, input }) => {
+        if (rooms.has(roomId)) {
+            const response = await axios.post("https://emkc.org/api/v2/piston/execute", {
+                language,
+                version,
+                files: [{ content: code }],
+                stdin: input,
+            });
+            rooms.get(roomId).output = response.data.run.output;
+            io.to(roomId).emit("codeResponse", response.data);
+        }
+    });
+
+    // Leave room
+    socket.on("leaveRoom", () => {
+        if (currentRoom && currentUser) {
+            rooms.get(currentRoom)?.users.delete(currentUser);
+            io.to(currentRoom).emit("userJoined", Array.from(rooms.get(currentRoom)?.users || []));
+            socket.leave(currentRoom);
+            currentRoom = null;
+            currentUser = null;
+        }
+    });
+
+    // Disconnect cleanup
+    socket.on("disconnect", () => {
+        if (currentRoom && currentUser) {
+            rooms.get(currentRoom)?.users.delete(currentUser);
+            io.to(currentRoom).emit("userJoined", Array.from(rooms.get(currentRoom)?.users || []));
+        }
+    });
+});
+
+const port = process.env.PORT || 5000;
+const __dirname=path.resolve()
+app.use(express.static(path.join(__dirname,"/frontend/dist")))
+app.get('*',(req,res)=>{
+    res.sendFile(path.join(__dirname,"frontend","dist","index.html"))
+})
+server.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
 });
