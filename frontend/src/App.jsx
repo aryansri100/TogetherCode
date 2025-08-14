@@ -6,7 +6,7 @@ import { useEffect } from 'react';
 import {v4 as uuid} from 'uuid'
 
 
-const socket=io("http://localhost:5000")
+const socket=io("https://togethercode-f3iy.onrender.com")
 
 const App = () => {
   const [joined,setJoined]=useState(false);

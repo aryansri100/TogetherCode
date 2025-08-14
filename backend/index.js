@@ -6,7 +6,7 @@ import axios from 'axios';
 
 const app = express();
 const server = http.createServer(app);
-const url = `https://render-hosting-se2b.onrender.com`;
+const url = `https://togethercode-f3iy.onrender.com`;
 const interval = 30000;
 
 function reloadWebsite() {
